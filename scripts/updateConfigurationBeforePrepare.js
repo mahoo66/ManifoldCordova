@@ -5,6 +5,7 @@ var fs = require('fs'),
     url = require('url'),
     downloader = require('./downloader'),
     createConfigParser = require('./createConfigParser'),
+    colorConverter = require('./colorConverter'),
     pendingTasks = [],
     Q,
     defaultIconsBaseDir,
@@ -29,6 +30,19 @@ var logger = {
     }
   }
 };
+
+var dataUriFormat = 'data:image/png;base64,';
+
+function newGuid () {
+  function s4() {
+    return Math.floor((1 + Math.random()) * 0x10000)
+      .toString(16)
+      .substring(1);
+  }
+
+  return s4() + s4() + '-' + s4() + '-' + s4() + '-' +
+    s4() + '-' + s4() + s4() + s4();
+}
 
 function ensurePathExists(pathName, callback) {
   fs.mkdir(pathName, function (err) {
@@ -79,13 +93,47 @@ function downloadImage(imageUrl, imagesPath, imageSrc) {
   });          
 }
 
+function writeEmbeddedImage(imageFilename, embeddedImage) {
+  var deferral = new Q.defer();
+  pendingTasks.push(deferral.promise);
+
+  var imagePath = path.dirname(imageFilename);
+  ensurePathExists(imagePath, function(err) {
+    if (err && err.code !== 'EEXIST') {
+      return logger.error("ERROR: Failed to create directory at: " + imagePath + ' - ' + err.message);
+    }
+
+    var image = new Buffer(embeddedImage.replace(dataUriFormat, ''), 'base64');
+
+    fs.writeFile(imageFilename, image, function(err) {
+      if (err) {
+        logger.error('Failed to write embbeded icon: ' + imageFilename);
+        return deferral.reject(err);
+      }
+
+      logger.log('Written embbeded icon file: ' + imageFilename);
+
+      deferral.resolve();
+    });
+  });
+}
+
 // normalize image list and download images to project folder
-function processImageList(images, baseUrl) {
+function processImageList(manifest, images, baseUrl) {
   var imageList = [];
   if (images && images instanceof Array) {
     images.forEach(function (image) {
-      var imageUrl = url.resolve(baseUrl, image.src);
-      image.src = url.parse(imageUrl).pathname;
+      var embeddedIcon, imageFilename;
+
+      if (image.src.match('^' + dataUriFormat)) {
+        embeddedIcon = image.src;
+        imageFilename = path.join(projectRoot, image.fileName || '/embedded/' + newGuid() + '.png');        
+        image.src = url.parse(imageFilename.replace(projectRoot, '')).pathname;
+      } else {
+        var imageUrl = url.resolve(baseUrl, image.src);
+        image.src = url.parse(imageUrl).pathname;
+      }
+
       var sizes = image.sizes.toLowerCase().split(' ');
       sizes.forEach(function (imageSize) {
         var dimensions = imageSize.split('x');
@@ -100,9 +148,16 @@ function processImageList(images, baseUrl) {
         imageList.push(element);
       });
 
-      var imagePath = path.dirname(path.join(projectRoot, image.src));
-            
-      downloadImage(imageUrl, imagePath, image.src);
+      if (embeddedIcon) {
+        // flag the manifest as updated and remove fileName from manifest's icon if present
+        manifest.__updated = true;
+        delete(image.fileName);
+
+        writeEmbeddedImage(imageFilename, embeddedIcon);
+      } else {
+        var imagePath = path.dirname(path.join(projectRoot, image.src));
+        downloadImage(imageUrl, imagePath, image.src);
+      }
     });
   }
 
@@ -114,13 +169,13 @@ function configureParser(context) {
     var cordova_util = context.requireCordovaModule('cordova-lib/src/cordova/util');
     var ConfigParser;
     try {
-        ConfigParser = context.requireCordovaModule('cordova-lib/node_modules/cordova-common').ConfigParser;
+        ConfigParser = context.requireCordovaModule('cordova-common').ConfigParser;
     } catch (err) {
         // Fallback to old location of config parser (old versions of cordova-lib)
         ConfigParser = context.requireCordovaModule('cordova-lib/src/configparser/ConfigParser');
     }
     
-    etree = context.requireCordovaModule('cordova-lib/node_modules/elementtree');
+    etree = context.requireCordovaModule('elementtree');
 
     var xml = cordova_util.projectConfig(projectRoot);
     config = createConfigParser(xml, etree, ConfigParser);   
@@ -180,11 +235,11 @@ function processAccessRules(manifest) {
         if (manifest.mjs_extended_scope && manifest.mjs_extended_scope instanceof Array) {
             manifest.mjs_extended_scope.forEach(function (item) {
                 // To avoid duplicates, add the rule only if it does not have the base URL as a prefix
-                if (item.indexOf(baseUrl) !== 0 ) {  
+                if (item.url.indexOf(baseUrl) !== 0 ) {  
                     // add as a navigation rule
                     var navigationEl = new etree.SubElement(config.doc.getroot(), 'allow-navigation');
                     navigationEl.set('hap-rule','yes');
-                    navigationEl.set('href', item);  
+                    navigationEl.set('href', item.url);  
                 }
             });
         }
@@ -606,11 +661,15 @@ module.exports = function (context) {
         // Even though a relative URL is a valid according to the W3C spec, a full URL 
         // is needed because the plugin cannot determine the manifest's origin.
         var start_url;
+		var from_local = false;
         if (manifest.start_url) {
           start_url = url.parse(manifest.start_url);
         }
 
-        if (!(start_url && start_url.hostname && start_url.protocol)) { 
+		if (start_url && !start_url.hostname && !start_url.protocol) {
+          from_local = true;
+          start_url.hostname = path.join(projectRoot, 'www');
+        } else if (!(start_url && start_url.hostname && start_url.protocol)) {
           logger.error('Invalid or incomplete W3C manifest.');
           var err = new Error('The start_url member in the manifest is required and must be a full URL.');
           return task.reject(err);
@@ -643,9 +702,24 @@ module.exports = function (context) {
           }
 
         })(manifest.orientation));
-
+        
         if (manifest.display) {
           config.setPreference('Fullscreen', manifest.display == 'fullscreen' ? 'true' : 'false');
+        }
+        
+        if (manifest.description) {
+            config.setElement('description', manifest.description);
+		}
+
+        if (manifest.background_color) {
+            var bgColor = colorConverter.toHexadecimal(manifest.background_color);
+            if (bgColor) {
+                config.setPreference('BackgroundColor', bgColor);
+            }
+        }
+
+        if (manifest.lang) {
+            config.setElement('defaultlocale', manifest.lang);
         }
 
         // configure access rules
@@ -654,11 +728,10 @@ module.exports = function (context) {
         // Obtain and download the icons and splash screens specified in the manifest.
         // Currently, splash screens specified in the splash_screens section of the manifest 
         // take precedence over similarly sized splash screens in the icons section.
-        var manifestIcons = processImageList(manifest.icons, manifest.start_url);
-        var manifestSplashScreens = processImageList(manifest.splash_screens, manifest.start_url);
+        var manifestIcons = processImageList(manifest, manifest.icons, manifest.start_url);
+        var manifestSplashScreens = processImageList(manifest, manifest.splash_screens, manifest.start_url);
 
-        Q.allSettled(pendingTasks).then(function () {
-            
+        Q.allSettled(pendingTasks).then(function () {            
           // Configure the icons once all icon files are downloaded
           processiOSIcons(manifestIcons, manifestSplashScreens);
           processAndroidIcons(manifestIcons, manifestSplashScreens);
@@ -667,8 +740,24 @@ module.exports = function (context) {
           
           // save the updated configuration
           config.write();
-          
-          task.resolve();
+        }).then(function() {
+          //ovewrite the updated w3c manifest if this is the case
+          if (manifest.__updated) {
+            logger.log('Manifest has been updated');
+            
+            delete(manifest.__updated);
+
+            var manifestFiles = [ manifestPath + '.updated', appManifestPath + '.updated' ];
+            logger.log('Writting manifest files: ' + manifestFiles);
+
+            return Q.allSettled(manifestFiles.map(function(manifestFile) {
+              return Q.nfcall(fs.writeFile, manifestFile, JSON.stringify(manifest, null, 4));
+            })).then(function() {
+              task.resolve();
+            });
+          } else {
+            task.resolve();
+          }
         });
       });
     });

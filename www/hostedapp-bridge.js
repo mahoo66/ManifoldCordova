@@ -1,4 +1,7 @@
-﻿(function (platform, pluginMode, cordovaBaseUrl) {
+﻿if (window.cordova.platformId === 'ios') {
+    cordova.require('cordova-plugin-wkwebview-engine.ios-wkwebview-exec');
+}
+(function (platform, pluginMode, cordovaBaseUrl) {
     function onCordovaLoaded() {
         var channel = cordova.require('cordova/channel');
         channel.onNativeReady.subscribe(function () {

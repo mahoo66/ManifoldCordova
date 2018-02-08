@@ -19,32 +19,41 @@ static NSString* const DEFAULT_CORDOVA_BASE_URL = @"";
 
 @implementation CVDWebViewNotificationDelegate
 
-- (void)webViewDidStartLoad:(UIWebView*)theWebView
+- (void)webView:(WKWebView*)webView didStartProvisionalNavigation:(WKNavigation*)navigation
 {
-    [self.wrappedDelegate webViewDidStartLoad:theWebView];
+    [self.wrappedDelegate webView:webView didStartProvisionalNavigation:navigation];
 
-    [[NSNotificationCenter defaultCenter] postNotification:[NSNotification notificationWithName:kCDVHostedWebAppWebViewDidStartLoad object:theWebView]];
+    [[NSNotificationCenter defaultCenter] postNotification:[NSNotification notificationWithName:kCDVHostedWebAppWebViewDidStartLoad object:webView]];
 }
 
-- (BOOL)webView:(UIWebView*)webView shouldStartLoadWithRequest:(NSURLRequest*)request navigationType:(UIWebViewNavigationType)navigationType
+- (void)webView:(WKWebView*)webView didFinishNavigation:(WKNavigation*)navigation
 {
-    [[NSNotificationCenter defaultCenter] postNotification:[NSNotification notificationWithName:kCDVHostedWebAppWebViewShouldStartLoadWithRequest object:request]];
-
-    return [self.wrappedDelegate webView:webView shouldStartLoadWithRequest:request navigationType:navigationType];
-}
-
-- (void)webViewDidFinishLoad:(UIWebView*)webView
-{
-    [self.wrappedDelegate webViewDidFinishLoad:webView];
+    [self.wrappedDelegate webView:webView didFinishNavigation:navigation];
 
     [[NSNotificationCenter defaultCenter] postNotification:[NSNotification notificationWithName:kCDVHostedWebAppWebViewDidFinishLoad object:webView]];
 }
-
-- (void)webView:(UIWebView*)webView didFailLoadWithError:(NSError*)error
+- (void)webView:(WKWebView*)theWebView didFailProvisionalNavigation:(WKNavigation*)navigation withError:(NSError*)error
 {
-    [self.wrappedDelegate webView:webView didFailLoadWithError:error];
+    [self.wrappedDelegate webView:theWebView didFailProvisionalNavigation:navigation withError:error];
+    
+    [self webView:theWebView didFailNavigation:navigation withError:error];
+}
+
+- (void)webView:(WKWebView*)theWebView didFailNavigation:(WKNavigation*)navigation withError:(NSError*)error
+{
+    [self.wrappedDelegate webView:theWebView didFailNavigation:navigation withError:error];
 
     [[NSNotificationCenter defaultCenter] postNotification:[NSNotification notificationWithName:kCDVHostedWebAppWebViewDidFailLoadWithError object:error]];
+}
+
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
+{
+    [self.wrappedDelegate webViewWebContentProcessDidTerminate:webView];
+}
+
+- (void) webView: (WKWebView *) webView decidePolicyForNavigationAction: (WKNavigationAction*) navigationAction decisionHandler: (void (^)(WKNavigationActionPolicy)) decisionHandler
+{
+    [self.wrappedDelegate webView:webView decidePolicyForNavigationAction:navigationAction decisionHandler:decisionHandler];
 }
 
 @end
@@ -106,8 +115,10 @@ static NSString* const defaultManifestFileName = @"manifest.json";
 
     // set the webview delegate to notify navigation events
     notificationDelegate = [[CVDWebViewNotificationDelegate alloc] init];
-    notificationDelegate.wrappedDelegate = ((UIWebView*)self.webView).delegate;
-    [(UIWebView*)self.webView setDelegate:notificationDelegate];
+
+    notificationDelegate.wrappedDelegate = ((WKWebView*)self.webView).navigationDelegate;
+    [(WKWebView*)self.webView setNavigationDelegate:(id<WKNavigationDelegate>)notificationDelegate];
+    
 
     id offlineFeature = [manifest objectForKey:@"mjs_offline_feature"];
     if (offlineFeature != nil && [offlineFeature boolValue] == NO) {
@@ -238,7 +249,9 @@ static NSString* const defaultManifestFileName = @"manifest.json";
         }
     }
     
-    return[(UIWebView*)self.webView stringByEvaluatingJavaScriptFromString:content] != nil;
+    //return[(UIWebView*)self.webView stringByEvaluatingJavaScriptFromString:content] != nil;
+    [(WKWebView*)self.webView evaluateJavaScript:content completionHandler:NULL];
+    return TRUE; //HACK: Return result is returned asynchronously, so this really needs to be changed to have a completion callback instead as well 
 }
 
 - (BOOL)isCordovaEnabled
@@ -321,7 +334,7 @@ static NSString* const defaultManifestFileName = @"manifest.json";
         if (match != nil)
         {
             CDVWhitelist* whitelist = [[CDVWhitelist alloc] initWithArray:match];
-            NSURL* url = ((UIWebView*)self.webView).request.URL;
+            NSURL* url = ((WKWebView*)self.webView).URL;
             isURLMatch = [whitelist URLIsAllowed:url];
         }
     }
@@ -384,7 +397,7 @@ static NSString* const defaultManifestFileName = @"manifest.json";
             }
             else {
                 if (self.failedURL) {
-                    [(UIWebView*)self.webView loadRequest:[NSURLRequest requestWithURL:self.failedURL]];
+                    [(WKWebView*)self.webView loadRequest:[NSURLRequest requestWithURL:self.failedURL]];
                 }
                 else {
                     [self.offlineView setHidden:YES];
@@ -439,7 +452,7 @@ static NSString* const defaultManifestFileName = @"manifest.json";
             }
             
             NSString* javascript = [NSString stringWithFormat:@"window.hostedWebApp = { 'platform': '%@', 'pluginMode': '%@', 'cordovaBaseUrl': '%@'};", IOS_PLATFORM, pluginMode, cordovaBaseUrl];
-            [(UIWebView*)self.webView stringByEvaluatingJavaScriptFromString:javascript];
+            [(WKWebView*)self.webView evaluateJavaScript:javascript completionHandler:NULL];
             
             NSMutableArray* scripts = [[NSMutableArray alloc] init];
             if ([pluginMode isEqualToString:@"client"])
@@ -447,6 +460,7 @@ static NSString* const defaultManifestFileName = @"manifest.json";
                 [scripts addObject:@"cordova.js"];
             }
             
+            [scripts addObject:@"plugins/cordova-plugin-wkwebview-engine/src/www/ios/ios-wkwebview-exec.js"];
             [scripts addObject:@"hostedapp-bridge.js"];
             [self injectScripts:scripts];
         }

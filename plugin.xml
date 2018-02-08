@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
     id="cordova-plugin-hostedwebapp"
-    version="0.3.1">
+    version="0.3.2">
     <name>HostedWebApp</name>
     <description>Hosted Web App Plugin</description>
     <license>MIT License</license>
@@ -11,6 +11,7 @@
 
     <dependency id="cordova-plugin-whitelist" version=">=1.0.1" />
     <dependency id="cordova-plugin-network-information" version=">=1.0.0" />
+	<dependency id="cordova-plugin-wkwebview-engine" version=">=1.0.0" />
 
     <hook type="before_prepare" src="scripts/updateConfigurationBeforePrepare.js" />
     <hook type="after_prepare" src="scripts/updateConfigurationAfterPrepare.js" />
@@ -25,8 +26,8 @@
 
     <engines>
         <engine name="cordova-windows" version="<=4.3.9" />
-        <engine name="cordova-ios" version="<=4.1.9" />
-        <engine name="cordova-android" version="<=5.1.9" />
+        <engine name="cordova-ios" version="<=5.0.0" />
+        <engine name="cordova-android" version="<=7.0.0" />
     </engines>
 
     <!-- android -->
